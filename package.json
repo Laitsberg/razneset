@@ -1,0 +1,13 @@
+{
+  "name": "razneset",
+  "private": true,
+  "type": "module",
+  "description": "Что разнесут? — прогноз оценок композитора для треков из Spotify",
+  "scripts": {
+    "model": "node scripts/build-model.mjs",
+    "backtest": "node scripts/backtest.mjs",
+    "try": "node scripts/try-playlist.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": { "node": ">=20" }
+}
