@@ -81,7 +81,11 @@ kbd{font:inherit;font-size:12px;background:var(--panel2);border:1px solid var(--
 .head{margin-top:16px}
 h2{font-family:var(--d);font-weight:600;font-size:19px;margin:0;line-height:1.25;
   overflow-wrap:anywhere}
-.meta-line{display:flex;flex-wrap:wrap;align-items:center;gap:0 14px;margin:2px 0 0}
+.head .hint{margin:2px 0 0}
+/* Кнопки — своей строкой под текстом. В одной строке с ним они на
+   разной ширине переносились по-разному, и между ними зияла дыра
+   высотой в палец. */
+.links{display:flex;gap:20px}
 /* Кнопки-ссылки: действия редкие, и рамки вокруг них отъедали первый
    экран — список начинался с середины телефона. Высота пальца та же. */
 button.link{background:none;color:var(--brand-hi);padding:0;font-weight:500;font-size:13px}
