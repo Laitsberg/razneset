@@ -10,9 +10,16 @@
    разрешает раз в секунду, и четыре тысячи артистов шли бы часами. */
 import fs from 'node:fs';
 import { SITE } from '../lib/shared.mjs';
-import { genresForMbids } from '../lib/mbgenres.mjs';
+import { genresForMbids, fetchGenreList, _setGenreList } from '../lib/mbgenres.mjs';
 
 const OUT = 'data/mb-genres.json';
+
+// Список жанров — свежий при каждом прогоне: по нему отсекаются теги и
+// здесь, и на сервере (data/mb-genre-list.json уезжает в образ Railway)
+const list = await fetchGenreList();
+fs.writeFileSync('data/mb-genre-list.json', JSON.stringify(list));
+_setGenreList(list);
+console.log(`Жанров в MusicBrainz: ${list.length}`);
 const countries = await (await fetch(new URL('data/countries.json', SITE))).json();
 const cache = fs.existsSync(OUT) ? JSON.parse(fs.readFileSync(OUT, 'utf8')) : {};
 const all = [...new Set(Object.values(countries.artists).map(a => a.mbid).filter(Boolean))];

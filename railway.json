@@ -3,7 +3,7 @@
   "build": {
     "builder": "DOCKERFILE",
     "dockerfilePath": "Dockerfile",
-    "watchPatterns": ["lib/**", "server/**", "Dockerfile", "railway.json", "package.json"]
+    "watchPatterns": ["lib/**", "server/**", "data/mb-genre-list.json", "Dockerfile", "railway.json", "package.json"]
   },
   "deploy": {
     "startCommand": "node server/index.mjs",

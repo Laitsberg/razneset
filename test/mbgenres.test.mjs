@@ -2,9 +2,12 @@
    Формы ответов сняты с настоящего MusicBrainz 16.10.2026. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { genresForSpotify, genresForMbids, topGenres } from '../lib/mbgenres.mjs';
+import { genresForSpotify, genresForMbids, topGenres, _setGenreList } from '../lib/mbgenres.mjs';
 
 const GENRE_LIST = ['j-pop', 'pop', 'alternative rock', 'indie rock', 'pop rock', 'new wave', 'rock'];
+// свой список вместо data/mb-genre-list.json: проверка не должна зависеть
+// от того, что сегодня в MusicBrainz
+_setGenreList(GENRE_LIST);
 
 /* Подставной MusicBrainz. log — какие адреса спрашивали и когда. */
 function fakeMb({ urls = {}, artists = {} } = {}) {

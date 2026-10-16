@@ -12,6 +12,8 @@ WORKDIR /app
 COPY package.json ./
 COPY lib/ ./lib/
 COPY server/ ./server/
+# список жанров MusicBrainz — чтобы не качать его 23 запросами при старте
+COPY data/mb-genre-list.json ./data/
 
 ENV NODE_ENV=production
 EXPOSE 3000

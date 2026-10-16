@@ -160,7 +160,10 @@ export function makeApp({ fetchPlaylist, playlistId, status, genresFor = null, n
           out[id] = c.promise ? await c.promise : c.g;
         }
         return send(req, res, 200, { genres: out });
-      } catch {
+      } catch (e) {
+        // причину — в лог: снаружи видно только «не ответил», а чинить
+        // по этому нечего (первый запуск на Railway так и разбирали)
+        console.error('/genres:', e.message);
         return send(req, res, 502, { error: 'MusicBrainz не ответил. Жанры подтянутся в следующий раз.' });
       }
     }
