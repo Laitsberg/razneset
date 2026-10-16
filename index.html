@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Что разнесут?</title>
+<meta name="description" content="Твои треки из Spotify против архива стрима «композитор разносит»: что уже разнесли и что, скорее всего, скажут об остальном.">
+<meta name="theme-color" content="#07070A">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- Те же шрифты, что на farymastats.info: приложение — его младший брат -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;800&family=Golos+Text:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app/style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <h1>Что разнесут?</h1>
+    <p class="sub">Твои треки из Spotify против архива стрима «композитор разносит»</p>
+  </div>
+</header>
+
+<main class="wrap">
+  <noscript><p class="note err">Без JavaScript приложение не работает.</p></noscript>
+
+  <p id="boot" class="note">Загружаю архив оценок…</p>
+
+  <!-- первый вход: ссылка на плейлист -->
+  <section id="start" hidden>
+    <form id="form" class="card" autocomplete="off">
+      <label for="url">Ссылка на плейлист в Spotify</label>
+      <div class="field">
+        <input id="url" name="url" type="url" inputmode="url" required
+               placeholder="https://open.spotify.com/playlist/…">
+        <button type="submit">Показать</button>
+      </div>
+      <p id="formErr" class="err" hidden></p>
+      <p class="hint">Плейлист должен быть публичным. Ссылка: в Spotify у плейлиста «⋯» → «Поделиться» → «Скопировать ссылку».</p>
+    </form>
+
+    <details class="card how">
+      <summary>Как сделать плейлист из «Любимых треков»</summary>
+      <p>Лайки ссылкой не отдаются, но их можно разом перенести в обычный плейлист. Удобнее всего на компьютере:</p>
+      <ol>
+        <li>Открой «Любимые треки».</li>
+        <li>Кликни по любому треку и нажми <kbd>Ctrl</kbd>+<kbd>A</kbd> (на Mac — <kbd>Cmd</kbd>+<kbd>A</kbd>): выделятся все.</li>
+        <li>Правый клик по выделенному → «Добавить в плейлист» → «Новый плейлист».</li>
+        <li>Проверь, что плейлист публичный (в его меню «⋯»), и скопируй ссылку.</li>
+      </ol>
+      <p>Новые лайки сами туда не попадут — их нужно будет добавлять так же.</p>
+    </details>
+  </section>
+
+  <!-- загрузка плейлиста -->
+  <section id="loading" hidden>
+    <div class="card loading">
+      <span class="spin" aria-hidden="true"></span>
+      <div>
+        <b>Загружаю плейлист…</b>
+        <p class="hint">Большие плейлисты — до 15 секунд: Spotify отдаёт треки по сотне.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- результат -->
+  <section id="result" hidden>
+    <div class="head">
+      <h2 id="plName"></h2>
+      <p class="hint meta-line"><span id="plMeta"></span>
+        <button id="refresh" class="link" type="button">Обновить</button>
+        <button id="change" class="link" type="button">Другой плейлист</button></p>
+    </div>
+    <p id="banner" class="note warn" hidden></p>
+
+    <nav class="tabs" role="tablist">
+      <button id="tabTodo" role="tab" type="button" aria-selected="true">Ещё не разнесли<span id="nTodo"></span></button>
+      <button id="tabRated" role="tab" type="button" aria-selected="false">Уже разнесли<span id="nRated"></span></button>
+    </nav>
+
+    <div class="tools">
+      <input id="q" type="search" placeholder="Поиск по артисту или названию" aria-label="Поиск">
+      <div id="chips" class="chips">
+        <button type="button" data-f="all" aria-pressed="true">Все</button>
+        <button type="button" data-f="known" aria-pressed="false">Знакомые артисты <span id="nKnown"></span></button>
+      </div>
+    </div>
+
+    <p id="hidden" class="hint"></p>
+    <ol id="list" class="list"></ol>
+    <p id="empty" class="note" hidden></p>
+    <button id="more" class="more" type="button" hidden></button>
+
+    <details class="card how">
+      <summary>Как считается прогноз</summary>
+      <div id="howText"></div>
+    </details>
+  </section>
+</main>
+
+<footer class="wrap foot">
+  <button id="install" class="ghost" type="button" hidden>Установить на телефон</button>
+  <p id="iosHint" class="hint" hidden>На iPhone: в Safari «Поделиться» → «На экран „Домой“».</p>
+  <p id="archive" class="hint"></p>
+  <p class="hint">Оценки — из архива <a href="https://farymastats.info">farymastats.info</a>. Сайт неофициальный.</p>
+</footer>
+
+<script type="module" src="app/main.mjs"></script>
+</body>
+</html>

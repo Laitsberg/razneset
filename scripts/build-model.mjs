@@ -28,7 +28,11 @@ if (rows.length < 5000) {
   process.exit(1);
 }
 
-const scale = sh.SCALE_ORDER.map(label => ({ label, score: sh.parseRate(label).score }));
+// цвет ступени — тот же, что на сайте статистики (TIERS в js/config.js)
+const scale = sh.SCALE_ORDER.map(label => {
+  const r = sh.parseRate(label);
+  return { label, score: r.score, c: r.color };
+});
 
 fs.mkdirSync('data', { recursive: true });
 const cache = fs.existsSync(CACHE) ? JSON.parse(fs.readFileSync(CACHE, 'utf8')) : {};

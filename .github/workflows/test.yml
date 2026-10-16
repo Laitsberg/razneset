@@ -1,0 +1,37 @@
+name: Проверки
+
+# При каждой правке кода: сначала быстрые проверки (прогноз, сопоставление,
+# сервер — без браузера, секунда), потом приложение в настоящем Chromium.
+# Коммиты модели от воркфлоу пересборки сюда не попадают: пуш от
+# GITHUB_TOKEN новых прогонов не запускает, и это к лучшему — модель
+# и так проверяется перед сборкой.
+on:
+  push:
+    branches: ['**']
+    paths-ignore: ['**.md']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # идентификатор — латиницей, иначе GitHub не разберёт файл
+  checks:
+    name: Прогноз, сервер и приложение
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Прогноз, сопоставление, сервер
+        run: npm test
+
+      - name: Поставить браузер
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Приложение в браузере
+        run: npm run test:app

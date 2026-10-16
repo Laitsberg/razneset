@@ -8,9 +8,15 @@
     "backtest": "node scripts/backtest.mjs",
     "try": "node scripts/try-playlist.mjs",
     "test": "node --test test/*.test.mjs",
-    "start": "node server/index.mjs"
+    "start": "node server/index.mjs",
+    "test:app": "node --test --test-concurrency=1 test/app/*.test.mjs",
+    "icons": "node scripts/icons.mjs",
+    "shots": "node scripts/shots.mjs"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
   }
 }
