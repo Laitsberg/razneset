@@ -1,0 +1,63 @@
+name: Пересобрать модель прогноза
+
+# Модель считается по архиву с farymastats.info. Архив там обновляет
+# свой воркфлоу по четырём будильникам (07:17–16:17 по Москве), и прогон
+# может идти больше часа: после таблицы он ещё дописывает страны. Угадать,
+# когда свежий data.csv доедет до сайта, нельзя, поэтому не подстраиваемся,
+# а просто заглядываем каждые три часа. Если архив не поменялся, модель
+# выходит байт в байт той же, и коммитить нечего — прогон занимает
+# полминуты.
+#
+# Запустить руками: вкладка Actions → «Run workflow».
+on:
+  schedule:
+    - cron: '41 */3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: model
+  cancel-in-progress: false
+
+jobs:
+  # Идентификатор задачи — только латиницей: с кириллицей GitHub не
+  # разбирает файл вовсе (так уже было в faryma.stats)
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Проверки
+        run: npm test
+
+      - name: Собрать модель
+        run: node scripts/build-model.mjs
+
+      - name: Закоммитить, если что-то изменилось
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/model.json data/spotify-tracks.json
+          if git diff --staged --quiet; then
+            echo "изменений нет"
+            exit 0
+          fi
+          RATED=$(node -p "require('./data/model.json').rated")
+          DATE=$(node -p "require('./data/model.json').archiveDate")
+          git commit -m "Модель: $RATED оценок, архив по $DATE"
+          # пока шёл прогон, в main могли запушить руками — переносим
+          # свой коммит поверх; он трогает только data/
+          for i in 1 2 3 4 5; do
+            git pull --rebase --autostash origin main && git push && exit 0
+            echo "попытка $i не прошла, жду"
+            sleep $((i * 5))
+          done
+          echo "не удалось запушить за 5 попыток"
+          exit 1
