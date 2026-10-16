@@ -37,6 +37,10 @@ jobs:
       - name: Проверки
         run: npm test
 
+      # новые артисты архива — пачками по 50, секунды
+      - name: Жанры MusicBrainz
+        run: node scripts/mb-genres.mjs
+
       - name: Собрать модель
         run: node scripts/build-model.mjs
 
@@ -44,7 +48,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/model.json data/spotify-tracks.json
+          git add data/model.json data/spotify-tracks.json data/mb-genres.json
           if git diff --staged --quiet; then
             echo "изменений нет"
             exit 0

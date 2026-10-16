@@ -38,21 +38,25 @@ after(async () => { await browser?.close(); site?.close(); });
 
 /* Страница с подменённым сервером. reply — что он отвечает на /playlist */
 async function open({ reply = () => ({ status: 200, body: { id: ID, name: 'Тестовый', total: TRACKS.length, tracks: TRACKS } }),
+                      genres = () => ({ status: 200, body: { genres: {} } }),
                       width = 360, ctx = null, url = site.url } = {}) {
   const context = ctx || await browser.newContext({ viewport: { width, height: 800 }, serviceWorkers: 'block' });
   const page = await context.newPage();
   const calls = [];
+  const genreCalls = [];
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.route(SERVER + '/**', async route => {
-    calls.push(route.request().url());
-    const r = await reply(calls.length);
+    const u = route.request().url();
+    let r;
+    if (u.includes('/genres?')) { genreCalls.push(u); r = await genres(u); }
+    else { calls.push(u); r = await reply(calls.length); }
     if (r === 'hang') return;   // сервер молчит
     await route.fulfill({ status: r.status, contentType: 'application/json',
                           headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(r.body) });
   });
   await page.goto(url);
-  return { page, context, calls, errors };
+  return { page, context, calls, genreCalls, errors };
 }
 
 const submit = async (page, link) => {
@@ -212,4 +216,63 @@ test('без сети открывается из кеша (сервис-вор�
     own.close();
     await context.close();
   }
+});
+
+/* ---------- жанры незнакомых артистов ---------- */
+const JAZZ_ID = 'J'.repeat(22), PUNK_ID = 'P'.repeat(22), NONE_ID = 'N'.repeat(22);
+const GT = [
+  { id: 'g1', title: 'Джазовый новичок', ms: 200_000, artists: [{ id: JAZZ_ID, name: 'Никому Не Известный Джазмен' }] },
+  { id: 'g2', title: 'Панковый новичок', ms: 200_000, artists: [{ id: PUNK_ID, name: 'Никому Не Известный Панк' }] },
+  { id: 'g3', title: 'Совсем безвестный', ms: 200_000, artists: [{ id: NONE_ID, name: 'Никому Не Известный Вообще' }] }
+];
+const GENRES = { [JAZZ_ID]: ['jazz'], [PUNK_ID]: ['punk'], [NONE_ID]: [] };
+const plWith = tracks => () => ({ status: 200, body: { id: ID, name: 'Жанры', total: tracks.length, tracks } });
+
+test('жанры MusicBrainz: незнакомые артисты получают прогноз по жанру', async () => {
+  assert.ok(model.mb.jazz && model.mb.punk, 'в модели должны быть жанры jazz и punk');
+  const { page, context, genreCalls } = await open({
+    reply: plWith(GT), genres: () => ({ status: 200, body: { genres: GENRES } })
+  });
+  await submit(page, LINK);
+  await page.waitForSelector('#genreNote:not([hidden])');
+  await page.waitForFunction(() => /нашёлся у/.test(document.getElementById('genreNote').textContent));
+  assert.match(await text(page, '#genreNote'), /Жанр нашёлся у 2 из 3 незнакомых артистов/);
+  assert.equal(genreCalls.length, 1);
+  assert.deepEqual(new URL(genreCalls[0]).searchParams.get('ids').split(',').sort(), [JAZZ_ID, NONE_ID, PUNK_ID].sort());
+
+  // ровно то, что посчитал бы splitLibrary с этими жанрами
+  const expect = splitLibrary(ix, GT.map(t => GENRES[t.artists[0].id].length ? { ...t, mbGenres: GENRES[t.artists[0].id] } : t));
+  const shown = await page.locator('#list li').evaluateAll(lis => lis.map(li => ({
+    title: li.querySelector('.name').textContent, rate: li.querySelector('.rate').textContent })));
+  assert.deepEqual(shown.map(x => x.title), expect.todo.map(x => x.track.title));
+  const jazz = shown.find(x => x.title === 'Джазовый новичок');
+  assert.match(jazz.rate, /≈ по жанру/);
+  assert.match(shown.find(x => x.title === 'Совсем безвестный').rate, /≈ новичок/);
+  assert.match(await page.locator('#list li', { hasText: 'Джазовый новичок' }).innerText(), /новичков в жанре «jazz»/);
+  await context.close();
+});
+
+test('жанры запоминаются: второй вход MusicBrainz не спрашивает', async () => {
+  const context = await browser.newContext({ viewport: { width: 360, height: 800 }, serviceWorkers: 'block' });
+  const g = () => ({ status: 200, body: { genres: GENRES } });
+  const first = await open({ ctx: context, reply: plWith(GT), genres: g });
+  await submit(first.page, LINK);
+  await first.page.waitForFunction(() => /нашёлся у/.test(document.getElementById('genreNote').textContent));
+  await first.page.close();
+  const second = await open({ ctx: context, reply: plWith(GT), genres: g });
+  await second.page.waitForSelector('#result:not([hidden])');
+  await second.page.waitForFunction(() => /нашёлся у/.test(document.getElementById('genreNote').textContent));
+  assert.equal(second.genreCalls.length, 0);
+  await context.close();
+});
+
+test('MusicBrainz не ответил — список на месте, прогноз без жанра, честная пометка', async () => {
+  const { page, context } = await open({
+    reply: plWith(GT), genres: () => ({ status: 502, body: { error: 'MusicBrainz не ответил.' } })
+  });
+  await submit(page, LINK);
+  await page.waitForFunction(() => /не ответил/.test(document.getElementById('genreNote').textContent));
+  assert.equal(await page.locator('#list li').count(), 3);
+  assert.equal(await page.locator('#list .rate', { hasText: 'по жанру' }).count(), 0);
+  await context.close();
 });

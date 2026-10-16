@@ -12,6 +12,8 @@ import { loadShared, loadArchiveCsv } from '../lib/shared.mjs';
 import { archiveRows } from '../lib/archive.mjs';
 import { buildModel } from '../lib/model.mjs';
 import { fetchTrack } from '../lib/spotify.mjs';
+import { archiveMbOf } from '../lib/mbgenres.mjs';
+import { SITE } from '../lib/shared.mjs';
 
 const CACHE = 'data/spotify-tracks.json';
 const OUT = 'data/model.json';
@@ -64,7 +66,15 @@ if (want.length) {
 
 const spTracks = Object.fromEntries(Object.entries(cache).filter(([, v]) => v));
 const lastDate = rows.map(r => r.date).filter(Boolean).sort().at(-1) || null;
-const model = buildModel({ rows, display, scale, spTracks, archiveDate: lastDate });
+// Жанры MusicBrainz артистов архива: ID артистов — из data/countries.json
+// сайта статистики, сами жанры — data/mb-genres.json (scripts/mb-genres.mjs).
+// Нет файла — модель соберётся без таблицы жанров, прогноз останется прежним.
+let mbOf = null;
+if (fs.existsSync('data/mb-genres.json')) {
+  const countries = await (await fetch(new URL('data/countries.json', SITE))).json();
+  mbOf = archiveMbOf(countries, JSON.parse(fs.readFileSync('data/mb-genres.json', 'utf8')));
+}
+const model = buildModel({ rows, display, scale, spTracks, archiveDate: lastDate, mbOf });
 fs.writeFileSync(OUT, JSON.stringify(model));
 
 const kb = (fs.statSync(OUT).size / 1024).toFixed(0);
@@ -72,3 +82,4 @@ console.log(`Готово: ${OUT}, ${kb} КБ`);
 console.log(`  оценок ${model.rated}, артистов ${Object.keys(model.artists).length}, ` +
             `связано с Spotify по ID ${Object.keys(model.spArtists).length}`);
 console.log(`  среднее ${model.globalMean}, у новичков ${model.newMean} (их ${model.newN})`);
+console.log(`  жанров MusicBrainz с новичками: ${Object.keys(model.mb).length}`);

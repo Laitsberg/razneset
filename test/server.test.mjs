@@ -120,3 +120,61 @@ test('/health не ходит в Spotify', async t => {
   assert.deepEqual((await s.get('/health')).body, { ok: true });
   assert.equal((await s.get('/status')).status, 502);
 });
+
+/* ---------- /genres ---------- */
+const A1 = 'A'.repeat(22), A2 = 'B'.repeat(22), A3 = 'C'.repeat(22);
+function genreServer(impl) {
+  const calls = [];
+  const genresFor = async ids => { calls.push([...ids]); return impl(ids); };
+  return { calls, genresFor };
+}
+
+test('/genres: жанры по ID, и второй раз в MusicBrainz не ходим', async t => {
+  const g = genreServer(ids => Object.fromEntries(ids.map(id => [id, id === A1 ? ['j-pop'] : []])));
+  const s = await start({ app: { genresFor: g.genresFor } }); t.after(s.close);
+  const r = await s.get(`/genres?ids=${A1},${A2}`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.genres, { [A1]: ['j-pop'], [A2]: [] });
+  await s.get(`/genres?ids=${A1},${A2}`);
+  assert.equal(g.calls.length, 1, 'и «не нашлось» тоже запомнили');
+  await s.get(`/genres?ids=${A1},${A3}`);
+  assert.deepEqual(g.calls[1], [A3], 'спрашиваем только новых');
+});
+
+test('/genres: одновременные запросы тех же артистов — один поход', async t => {
+  const g = genreServer(async ids => { await new Promise(r => setTimeout(r, 50)); return Object.fromEntries(ids.map(id => [id, ['pop']])); });
+  const s = await start({ app: { genresFor: g.genresFor } }); t.after(s.close);
+  const rs = await Promise.all([1, 2, 3].map(() => s.get(`/genres?ids=${A1}`)));
+  assert.ok(rs.every(r => r.body.genres[A1][0] === 'pop'));
+  assert.equal(g.calls.length, 1);
+});
+
+test('/genres: мусор и слишком длинный список отклоняются без похода', async t => {
+  const g = genreServer(() => ({}));
+  const s = await start({ app: { genresFor: g.genresFor } }); t.after(s.close);
+  assert.equal((await s.get('/genres?ids=<script>,x')).status, 400);
+  const many = Array.from({ length: 301 }, (_, i) => String(i).padStart(22, 'z')).join(',');
+  assert.equal((await s.get('/genres?ids=' + many)).status, 400);
+  assert.equal(g.calls.length, 0);
+});
+
+test('/genres: сбой MusicBrainz — 502, и он не запоминается', async t => {
+  let fail = true;
+  const g = genreServer(ids => { if (fail) throw new Error('503'); return Object.fromEntries(ids.map(id => [id, ['rock']])); });
+  const s = await start({ app: { genresFor: g.genresFor } }); t.after(s.close);
+  assert.equal((await s.get(`/genres?ids=${A1}`)).status, 502);
+  fail = false;
+  assert.deepEqual((await s.get(`/genres?ids=${A1}`)).body.genres[A1], ['rock']);
+});
+
+test('/genres: через две недели спрашиваем заново', async t => {
+  const g = genreServer(ids => Object.fromEntries(ids.map(id => [id, []])));
+  const s = await start({ app: { genresFor: g.genresFor } }); t.after(s.close);
+  await s.get(`/genres?ids=${A1}`);
+  s.tick(13 * 24 * 3600_000);
+  await s.get(`/genres?ids=${A1}`);
+  assert.equal(g.calls.length, 1);
+  s.tick(2 * 24 * 3600_000);
+  await s.get(`/genres?ids=${A1}`);
+  assert.equal(g.calls.length, 2);
+});

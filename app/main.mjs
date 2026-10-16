@@ -22,6 +22,9 @@ const store = {
 };
 const K_URL = 'razneset.playlist';     // ссылка, которую человек дал
 const K_LAST = 'razneset.last';        // последний загруженный плейлист
+const K_GENRES = 'razneset.genres';    // { ID артиста Spotify: [жанры MusicBrainz] }
+const GENRE_CHUNK = 300;               // столько ID сервер берёт за раз
+const SPOTIFY_ID = /^[A-Za-z0-9]{22}$/;
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
@@ -30,6 +33,11 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 let ix = null;            // модель с индексами
 let pl = null;            // { id, name, total, tracks, at }
 let res = null;           // { rated, todo, dropped }
+// Что MusicBrainz ответил про артистов — помним и между входами:
+// спрашивать его дорого (раз в секунду на всех), а жанры меняются редко.
+// Пустой список — тоже ответ («не знает»), его не переспрашиваем.
+const genreCache = store.get(K_GENRES) || {};
+let genreState = null;    // { total, loading, failed }
 const view = { tab: 'todo', filter: 'all', q: '', shown: PAGE };
 
 /* ---------- экраны ---------- */
@@ -93,17 +101,75 @@ async function open(input, { quiet = false } = {}) {
   }
 }
 
-function setPlaylist(p, { keepView = false } = {}) {
-  pl = p;
-  res = splitLibrary(ix, p.tracks);
+/* Жанры трека — жанры всех его артистов без повторов: так же их
+   складывала модель, когда училась (lib/model.mjs). */
+function withGenres(tracks) {
+  return tracks.map(t => {
+    const g = [...new Set(t.artists.flatMap(a => genreCache[a.id] || []))];
+    return g.length ? { ...t, mbGenres: g } : t;
+  });
+}
+
+function compute() {
+  res = splitLibrary(ix, withGenres(pl.tracks));
   // поиск заранее: на каждую букву в поле пересчитывать дорого
   for (const x of [...res.todo, ...res.rated]) {
     x.hay = (x.track.title + ' ' + x.track.artists.map(a => a.name).join(' ')).toLowerCase();
   }
+}
+
+function setPlaylist(p, { keepView = false } = {}) {
+  pl = p;
+  compute();
   if (!keepView) Object.assign(view, { tab: 'todo', filter: 'all', q: '', shown: PAGE });
   $('q').value = view.q;
   show('result');
   render();
+  loadGenres();
+}
+
+/* Жанры незнакомых артистов — в фоне, после того как список уже на
+   экране: MusicBrainz отвечает раз в секунду, на большой плейлист уходит
+   секунд пятнадцать, и держать всё это время пустой экран незачем.
+   Знакомым жанр не нужен: у них прогноз по их собственным разносам. */
+async function loadGenres() {
+  const ids = [...new Set(res.todo.filter(x => !x.basis.length)
+    .flatMap(x => x.track.artists.map(a => a.id)).filter(id => SPOTIFY_ID.test(id)))];
+  const missing = ids.filter(id => !(id in genreCache));
+  const forId = pl.id;
+  genreState = { total: ids.length, loading: missing.length > 0, failed: false };
+  renderGenreNote();
+  if (!missing.length) return;
+  try {
+    for (let i = 0; i < missing.length; i += GENRE_CHUNK) {
+      const r = await fetch(`${SERVER}/genres?ids=${missing.slice(i, i + GENRE_CHUNK).join(',')}`);
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j?.genres) throw new Error(j?.error || r.status);
+      Object.assign(genreCache, j.genres);
+    }
+  } catch {
+    genreState.failed = true;
+  }
+  store.set(K_GENRES, genreCache);
+  genreState.loading = false;
+  if (!pl || pl.id !== forId) return;   // пока ждали, открыли другой плейлист
+  compute();
+  render();
+}
+
+function renderGenreNote() {
+  const el = $('genreNote');
+  const g = genreState;
+  if (!g || !g.total || view.tab !== 'todo') { el.hidden = true; return; }
+  el.hidden = false;
+  const ids = res.todo.filter(x => !x.basis.length).flatMap(x => x.track.artists.map(a => a.id));
+  const found = new Set(ids.filter(id => genreCache[id]?.length)).size;
+  el.textContent = g.loading
+    ? 'Ищу жанры незнакомых артистов в MusicBrainz…'
+    : g.failed && !found
+      ? 'MusicBrainz сейчас не ответил — у незнакомых артистов прогноз пока без жанра.'
+      : `Жанр нашёлся у ${num(found)} из ${num(g.total)} незнакомых ${plural(g.total, 'артиста', 'артистов', 'артистов')} ` +
+        `(MusicBrainz) — их прогноз «≈ по жанру».`;
 }
 
 /* ---------- подписи ---------- */
@@ -139,7 +205,8 @@ function rowTodo(x) {
   const dur = x.long
     ? `<span class="meta dur long">${mmss(t.ms)}<b>доплата</b></span>`
     : `<span class="meta dur">${mmss(t.ms)}</span>`;
-  return `<li class="row">${pill(x.label, known ? '' : 'guess', known ? '' : ' <small>≈ новичок</small>')}${dur}` +
+  const tag = known ? '' : x.prior.genres.length ? ' <small>≈ по жанру</small>' : ' <small>≈ новичок</small>';
+  return `<li class="row">${pill(x.label, known ? '' : 'guess', tag)}${dur}` +
     `${trackLink(t)}${who(t)}<div class="why">${esc(x.why)}</div></li>`;
 }
 
@@ -182,6 +249,7 @@ function render() {
   $('hidden').textContent = view.tab === 'todo' && parts.length ? 'Не показаны: ' + parts.join(', ') + '.' : '';
   $('hidden').hidden = !$('hidden').textContent;
 
+  renderGenreNote();
   const list = currentList();
   const slice = list.slice(0, view.shown);
   $('list').innerHTML = slice.map(view.tab === 'todo' ? rowTodo : rowRated).join('');
@@ -204,8 +272,10 @@ function render() {
     У трека с несколькими артистами их разносы складываются.</p>
     <p>Проверено по истории эфиров: прогноз для каждого трека строили только по тому, что разнесли раньше, и сравнили
     с настоящей оценкой. Для знакомого артиста прогноз в среднем промахивается примерно на полступени.
-    Для незнакомого артиста (у таких плашка обведена пунктиром) это просто среднее новичков —
-    порядок таких треков между собой ничего не значит.</p>
+    Незнакомый артист (плашка обведена пунктиром) получает среднюю оценку новичков, а если MusicBrainz знает
+    его жанр — новичков этого жанра: у классики и джаза она заметно выше, чем у панка и метала. Жанр находится
+    примерно у трети незнакомых артистов. Без жанра порядок таких треков между собой ничего не значит;
+    с жанром — уже кое-что, но ошибка заметно больше, чем у знакомых.</p>
     <p>Скрыты треки короче 2:00, минусовки, караоке, фортепианные версии и дубли.
     Треки длиннее 6:00 помечены красным: за их разнос доплата.</p>`;
 }

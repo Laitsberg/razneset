@@ -121,3 +121,29 @@ test('число переводится в ближайшую ступень', (
   assert.equal(scoreLabel(ix, 6.6), 'хорошечно++');
   assert.equal(scoreLabel(ix, 0.4), 'кринж-контент');
 });
+
+test('жанр MusicBrainz: незнакомый артист получает среднее новичков своего жанра', () => {
+  const rowsMb = [
+    row('Jazz One', 'a', 9, 1), row('Jazz Two', 'b', 9, 2),
+    row('Punk One', 'c', 4, 1), row('Punk Two', 'd', 4, 2)
+  ];
+  const mbOf = k => k.startsWith('jazz') ? ['jazz'] : ['punk'];
+  const m = buildModel({ rows: rowsMb, display: k => k, scale: SCALE, mbOf });
+  assert.deepEqual(m.mb, { jazz: { n: 2, mean: 9 }, punk: { n: 2, mean: 4 } });
+  const i2 = indexModel(m);
+  const jazz = predictTrack(i2, { ...tr(['Новенький'], 'X'), mbGenres: ['jazz'] });
+  const punk = predictTrack(i2, { ...tr(['Новенький'], 'X'), mbGenres: ['punk'] });
+  const none = predictTrack(i2, { ...tr(['Новенький'], 'X'), mbGenres: ['zydeco'] });
+  // (2×9 + 10×6.5) / (2+10)
+  assert.equal(jazz.score, 6.92);
+  assert.ok(punk.score < none.score && none.score < jazz.score);
+  assert.equal(none.score, m.newMean, 'жанр без единого новичка в архиве ничего не говорит');
+  assert.match(jazz.why, /новичков в жанре «jazz»/);
+  assert.deepEqual(jazz.prior.genres, ['jazz']);
+});
+
+test('у знакомого артиста жанр почти не влияет: решают его разносы', () => {
+  const p = predictTrack(ix, { ...tr(['Reol'], 'Y'), mbGenres: ['jazz'] });
+  assert.equal(p.basis[0].name, 'Reol');
+  assert.match(p.why, /Reol: 3 разноса/);
+});

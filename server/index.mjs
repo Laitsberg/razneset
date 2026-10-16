@@ -3,11 +3,13 @@
    (по умолчанию с любого: данные и так публичные). */
 import http from 'node:http';
 import { makeApp } from './app.mjs';
+import { genresForSpotify } from '../lib/mbgenres.mjs';
 import { fetchPlaylist, playlistId, anonToken, queryHashes, hashSource } from '../lib/spotify.mjs';
 
 const app = makeApp({
   fetchPlaylist,
   playlistId,
+  genresFor: ids => genresForSpotify(ids),
   allowOrigin: process.env.ALLOW_ORIGIN || '*',
   status: async () => {
     const token = await anonToken();

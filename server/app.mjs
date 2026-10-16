@@ -30,19 +30,33 @@ const CACHE_MAX = 50;
 const RATE_N = 20;
 const RATE_MS = 10 * 60_000;
 
-export function makeApp({ fetchPlaylist, playlistId, status, now = Date.now,
+/* Жанры MusicBrainz артиста меняются редко, а спрашивать их дорого
+   (раз в секунду на всех) — помним две недели. «Не нашлось» помним
+   так же: иначе каждый плейлист заново спрашивал бы сотни безвестных. */
+const GENRE_MS = 14 * 24 * 3600_000;
+const GENRE_IDS_MAX = 300;      // за один запрос — адрес не должен распухать
+const GENRE_RATE_N = 30;        // запросов с новыми артистами за 10 минут
+
+export function makeApp({ fetchPlaylist, playlistId, status, genresFor = null, now = Date.now,
                           allowOrigin = '*' }) {
   const cache = new Map();     // id → { at, promise }
-  const hits = new Map();      // ip → [метки времени]
+  const genreCache = new Map();  // id артиста Spotify → { at, g } или { at, promise }
 
-  function overLimit(ip) {
-    const t = now();
-    const list = (hits.get(ip) || []).filter(x => t - x < RATE_MS);
-    if (list.length >= RATE_N) { hits.set(ip, list); return true; }
-    list.push(t);
-    hits.set(ip, list);
-    return false;
-  }
+  const limiter = (n, ms) => {
+    const hits = new Map();    // ip → [метки времени]
+    return ip => {
+      const t = now();
+      const list = (hits.get(ip) || []).filter(x => t - x < ms);
+      if (list.length >= n) { hits.set(ip, list); return true; }
+      list.push(t);
+      hits.set(ip, list);
+      return false;
+    };
+  };
+  const overLimit = limiter(RATE_N, RATE_MS);
+  const overGenreLimit = limiter(GENRE_RATE_N, RATE_MS);
+  const clientIp = req => String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
+    .split(',')[0].trim();
 
   function load(id) {
     const c = cache.get(id);
@@ -98,8 +112,7 @@ export function makeApp({ fetchPlaylist, playlistId, status, now = Date.now,
       if (!id) return send(req, res, 400, { error: 'Это не похоже на ссылку на плейлист Spotify.' });
 
       // Railway стоит за прокси: настоящий адрес — первый в x-forwarded-for
-      const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
-        .split(',')[0].trim();
+      const ip = clientIp(req);
       const c = cache.get(id);
       const fresh = c && now() - c.at < CACHE_MS;
       if (!fresh && overLimit(ip)) {
@@ -118,6 +131,40 @@ export function makeApp({ fetchPlaylist, playlistId, status, now = Date.now,
       }
     }
 
-    return send(req, res, 404, { error: 'Нет такого адреса. Есть /playlist?url=…, /health, /status' });
+    if (u.pathname === '/genres' && genresFor) {
+      const ids = [...new Set((u.searchParams.get('ids') || '').split(','))]
+        .filter(id => /^[A-Za-z0-9]{22}$/.test(id));
+      if (!ids.length) return send(req, res, 400, { error: 'Нужны ID артистов Spotify через запятую.' });
+      if (ids.length > GENRE_IDS_MAX) return send(req, res, 400, { error: `Не больше ${GENRE_IDS_MAX} артистов за раз.` });
+
+      const fresh = id => { const c = genreCache.get(id); return c && (c.promise || now() - c.at < GENRE_MS); };
+      const missing = ids.filter(id => !fresh(id));
+      if (missing.length && overGenreLimit(clientIp(req))) {
+        return send(req, res, 429, { error: 'Слишком много запросов жанров подряд.' },
+                    { 'retry-after': String(RATE_MS / 1000) });
+      }
+      if (missing.length) {
+        // одна пачка на всех недостающих; кто придёт за ними же, пока она
+        // в пути, дождётся её, а не пойдёт в MusicBrainz второй раз
+        const batch = genresFor(missing);
+        for (const id of missing) {
+          const promise = batch.then(r => r[id] || []);
+          genreCache.set(id, { at: now(), promise });
+          promise.then(g => genreCache.set(id, { at: now(), g }), () => genreCache.delete(id));
+        }
+      }
+      try {
+        const out = {};
+        for (const id of ids) {
+          const c = genreCache.get(id);
+          out[id] = c.promise ? await c.promise : c.g;
+        }
+        return send(req, res, 200, { genres: out });
+      } catch {
+        return send(req, res, 502, { error: 'MusicBrainz не ответил. Жанры подтянутся в следующий раз.' });
+      }
+    }
+
+    return send(req, res, 404, { error: 'Нет такого адреса. Есть /playlist?url=…, /genres?ids=…, /health, /status' });
   };
 }

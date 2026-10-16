@@ -23,6 +23,9 @@ import { archiveRows } from '../lib/archive.mjs';
 import { buildModel } from '../lib/model.mjs';
 import { indexModel, predictTrack } from '../lib/predict.mjs';
 import { titleNorm } from '../lib/names.mjs';
+import { archiveMbOf } from '../lib/mbgenres.mjs';
+import { SITE } from '../lib/shared.mjs';
+import fs from 'node:fs';
 
 const sh = await loadShared();
 const { rows, display } = archiveRows(sh, await loadArchiveCsv());
@@ -35,7 +38,16 @@ const last = streams.at(-1);
 // это свойство архива, а не случайность одного отрезка
 const WINDOWS = [[last - 160, last - 80], [last - 80, last + 1]];
 const KS = (process.env.KS || '0.5,1,2,4').split(',').map(Number);
+/* GENRE=1  — жанр из таблицы известен у каждого трека (потолок: так
+              хорошо не будет никогда, у треков из Spotify жанра таблицы нет);
+   GENRE=mb — жанры MusicBrainz, как в приложении: только у незнакомых
+              артистов и только у тех, кого MusicBrainz знает. */
 const useGenre = process.env.GENRE === '1';
+const useMb = process.env.GENRE === 'mb';
+const mbOf = useMb
+  ? archiveMbOf(await (await fetch(new URL('data/countries.json', SITE))).json(),
+                JSON.parse(fs.readFileSync('data/mb-genres.json', 'utf8')))
+  : null;
 
 const mean = a => a.reduce((s, x) => s + x, 0) / a.length;
 function ranks(a) {
@@ -67,7 +79,7 @@ for (const [from, to] of WINDOWS) {
   for (const s of streams.filter(x => x >= from && x < to)) {
     const past = rows.filter(r => r.streamNum != null && r.streamNum < s);
     const seen = new Set(past.map(trackKey));
-    const model = buildModel({ rows: past, display, scale });
+    const model = buildModel({ rows: past, display, scale, mbOf });
     const ix = indexModel(model);
     for (const r of rows.filter(x => x.streamNum === s)) {
       if (!r.parts.length || seen.has(trackKey(r))) continue;
@@ -76,8 +88,10 @@ for (const [from, to] of WINDOWS) {
                       genres: useGenre ? r.genres : [] };
       for (const k of KS) {
         model.k = k;
-        const p = predictTrack(ix, track);
-        results.get(k).push([p.score, r.score, p.basis.length > 0]);
+        let p = predictTrack(ix, track);
+        // жанр спрашиваем только для незнакомых — как приложение
+        if (useMb && !p.basis.length) p = predictTrack(ix, { ...track, mbGenres: [...new Set(r.parts.flatMap(mbOf))] });
+        results.get(k).push([p.score, r.score, p.basis.length > 0, p.prior.genres.length > 0]);
       }
       flat.push([model.globalMean, r.score]);
     }
@@ -86,12 +100,17 @@ for (const [from, to] of WINDOWS) {
   const any = results.get(KS[0]);
   const known = any.filter(p => p[2]).length;
   console.log(`\nЭфиры ${from}–${to - 1}: треков ${any.length}, из них артист уже был в архиве у ${known} ` +
-              `(${Math.round(100 * known / any.length)}%)` + (useGenre ? ', жанр известен' : ''));
+              `(${Math.round(100 * known / any.length)}%)` + (useGenre ? ', жанр известен' : useMb ? ', жанры MusicBrainz' : ''));
   console.log(`  всем среднее:  ошибка ${err(flat)}, порядок ${spearman(flat).toFixed(2)}`);
   for (const [k, ps] of results) {
     const kn = ps.filter(p => p[2]), nw = ps.filter(p => !p[2]);
     console.log(`  K=${String(k).padEnd(4)} ошибка ${err(ps)}, порядок ${spearman(ps).toFixed(2)}` +
                 ` | знакомые артисты: ошибка ${err(kn)}, порядок ${spearman(kn).toFixed(2)}` +
                 ` | новички: ошибка ${err(nw)}, порядок ${spearman(nw).toFixed(2)}`);
+    if (useMb) {
+      const g = nw.filter(p => p[3]);
+      console.log(`         из новичков жанр нашёлся у ${g.length} из ${nw.length} (${Math.round(100 * g.length / nw.length)}%): ` +
+                  `ошибка ${err(g)}, порядок ${spearman(g).toFixed(2)}`);
+    }
   }
 }
