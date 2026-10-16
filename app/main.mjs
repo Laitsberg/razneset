@@ -24,6 +24,8 @@ const K_URL = 'razneset.playlist';     // ссылка, которую чело�
 const K_LAST = 'razneset.last';        // последний загруженный плейлист
 const K_GENRES = 'razneset.genres';    // { ID артиста Spotify: [жанры MusicBrainz] }
 const GENRE_CHUNK = 300;               // столько ID сервер берёт за раз
+const GENRE_ROUNDS = 4;                // сколько раз переспросить недоисканное
+const GENRE_RETRY_MS = 25_000;
 const SPOTIFY_ID = /^[A-Za-z0-9]{22}$/;
 
 const $ = id => document.getElementById(id);
@@ -135,26 +137,42 @@ function setPlaylist(p, { keepView = false } = {}) {
 async function loadGenres() {
   const ids = [...new Set(res.todo.filter(x => !x.basis.length)
     .flatMap(x => x.track.artists.map(a => a.id)).filter(id => SPOTIFY_ID.test(id)))];
-  const missing = ids.filter(id => !(id in genreCache));
+  let pending = ids.filter(id => !(id in genreCache));
   const forId = pl.id;
-  genreState = { total: ids.length, loading: missing.length > 0, failed: false };
+  genreState = { total: ids.length, loading: pending.length > 0, failed: false, pending: pending.length, gaveUp: false };
   renderGenreNote();
-  if (!missing.length) return;
-  try {
-    for (let i = 0; i < missing.length; i += GENRE_CHUNK) {
-      const r = await fetch(`${SERVER}/genres?ids=${missing.slice(i, i + GENRE_CHUNK).join(',')}`);
-      const j = await r.json().catch(() => null);
-      if (!r.ok || !j?.genres) throw new Error(j?.error || r.status);
-      Object.assign(genreCache, j.genres);
+  // Сервер отвечает не дольше 20 секунд: что не успел найти (MusicBrainz
+  // бывает перегружен), ищет дальше сам и отдаёт в списке pending. Его и
+  // переспрашиваем — несколько раз, с паузой. Остальное — при следующем входе.
+  for (let round = 0; pending.length && round < GENRE_ROUNDS; round++) {
+    if (round) {
+      await new Promise(r => setTimeout(r, GENRE_RETRY_MS));
+      if (!pl || pl.id !== forId) return;   // пока ждали, открыли другой плейлист
     }
-  } catch {
-    genreState.failed = true;
+    const chunks = [];
+    for (let i = 0; i < pending.length; i += GENRE_CHUNK) chunks.push(pending.slice(i, i + GENRE_CHUNK));
+    const next = [];
+    await Promise.all(chunks.map(async chunk => {
+      try {
+        const r = await fetch(`${SERVER}/genres?ids=${chunk.join(',')}`);
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j?.genres) throw new Error(j?.error || r.status);
+        Object.assign(genreCache, j.genres);
+        next.push(...(j.pending || []));
+      } catch {
+        genreState.failed = true;
+        next.push(...chunk);
+      }
+    }));
+    pending = next;
+    store.set(K_GENRES, genreCache);
+    genreState.pending = pending.length;
+    genreState.loading = pending.length > 0 && round + 1 < GENRE_ROUNDS;
+    genreState.gaveUp = pending.length > 0 && !genreState.loading;
+    if (!pl || pl.id !== forId) return;
+    compute();
+    render();
   }
-  store.set(K_GENRES, genreCache);
-  genreState.loading = false;
-  if (!pl || pl.id !== forId) return;   // пока ждали, открыли другой плейлист
-  compute();
-  render();
 }
 
 function renderGenreNote() {
@@ -164,12 +182,14 @@ function renderGenreNote() {
   el.hidden = false;
   const ids = res.todo.filter(x => !x.basis.length).flatMap(x => x.track.artists.map(a => a.id));
   const found = new Set(ids.filter(id => genreCache[id]?.length)).size;
-  el.textContent = g.loading
-    ? 'Ищу жанры незнакомых артистов в MusicBrainz…'
-    : g.failed && !found
-      ? 'MusicBrainz сейчас не ответил — у незнакомых артистов прогноз пока без жанра.'
-      : `Жанр нашёлся у ${num(found)} из ${num(g.total)} незнакомых ${plural(g.total, 'артиста', 'артистов', 'артистов')} ` +
-        `(MusicBrainz) — их прогноз «≈ по жанру».`;
+  const done = `Жанр нашёлся у ${num(found)} из ${num(g.total)} незнакомых ` +
+    `${plural(g.total, 'артиста', 'артистов', 'артистов')} (MusicBrainz) — их прогноз «≈ по жанру».`;
+  el.textContent =
+      g.loading && !found ? 'Ищу жанры незнакомых артистов в MusicBrainz…'
+    : g.loading ? `${done} MusicBrainz сейчас медленный: ещё ${num(g.pending)} ищутся.`
+    : g.gaveUp && !found ? 'MusicBrainz сейчас не ответил — жанры незнакомых артистов подтянутся при следующем открытии.'
+    : g.gaveUp ? `${done} Ещё ${num(g.pending)} не успели — подтянутся при следующем открытии.`
+    : done;
 }
 
 /* ---------- подписи ---------- */

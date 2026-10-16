@@ -158,13 +158,41 @@ test('/genres: мусор и слишком длинный список откл
   assert.equal(g.calls.length, 0);
 });
 
-test('/genres: сбой MusicBrainz — 502, и он не запоминается', async t => {
+test('/genres: сбой MusicBrainz — «ещё ищется», и сбой не запоминается', async t => {
   let fail = true;
   const g = genreServer(ids => { if (fail) throw new Error('503'); return Object.fromEntries(ids.map(id => [id, ['rock']])); });
   const s = await start({ app: { genresFor: g.genresFor } }); t.after(s.close);
-  assert.equal((await s.get(`/genres?ids=${A1}`)).status, 502);
+  const r1 = await s.get(`/genres?ids=${A1}`);
+  assert.equal(r1.status, 200);
+  assert.deepEqual(r1.body, { genres: {}, pending: [A1] });
   fail = false;
   assert.deepEqual((await s.get(`/genres?ids=${A1}`)).body.genres[A1], ['rock']);
+});
+
+test('/genres: MusicBrainz тянет — отдаём что есть, поиск идёт дальше в фоне', async t => {
+  let release;
+  const slow = new Promise(r => { release = r; });
+  const g = genreServer(async ids => { if (ids.includes(A2)) await slow; return Object.fromEntries(ids.map(id => [id, ['pop']])); });
+  const s = await start({ app: { genresFor: g.genresFor, genreWaitMs: 100 } }); t.after(s.close);
+  // A1 уже известен, A2 — долгий
+  await s.get(`/genres?ids=${A1}`);
+  const r1 = await s.get(`/genres?ids=${A1},${A2}`);
+  assert.deepEqual(r1.body, { genres: { [A1]: ['pop'] }, pending: [A2] });
+  release();
+  await new Promise(r => setTimeout(r, 20));
+  const r2 = await s.get(`/genres?ids=${A2}`);
+  assert.deepEqual(r2.body, { genres: { [A2]: ['pop'] }, pending: [] });
+  assert.equal(g.calls.length, 2, 'за A2 ходили один раз, второй запрос дождался той же пачки');
+});
+
+test('/genres: большой список — пачками по 50, чтобы сбой одной не губил остальные', async t => {
+  const ids = Array.from({ length: 120 }, (_, i) => String(i).padStart(22, 'q'));
+  const g = genreServer(part => { if (part.includes(ids[0])) throw new Error('503'); return Object.fromEntries(part.map(id => [id, []])); });
+  const s = await start({ app: { genresFor: g.genresFor } }); t.after(s.close);
+  const r = await s.get('/genres?ids=' + ids.join(','));
+  assert.deepEqual(g.calls.map(c => c.length), [50, 50, 20]);
+  assert.equal(r.body.pending.length, 50);
+  assert.equal(Object.keys(r.body.genres).length, 70);
 });
 
 test('/genres: через две недели спрашиваем заново', async t => {

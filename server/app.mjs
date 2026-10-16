@@ -36,9 +36,15 @@ const RATE_MS = 10 * 60_000;
 const GENRE_MS = 14 * 24 * 3600_000;
 const GENRE_IDS_MAX = 300;      // за один запрос — адрес не должен распухать
 const GENRE_RATE_N = 30;        // запросов с новыми артистами за 10 минут
+/* MusicBrainz бывает перегружен целиком (503, «zone: global») — тогда
+   ответ может идти минутами. Телефон столько ждать не должен: через
+   GENRE_WAIT_MS отдаём, что успело найтись, и список «ещё ищется», а
+   поиск продолжается здесь, в фоне, и запоминается по пачкам. */
+const GENRE_WAIT_MS = 20_000;
+const GENRE_CHUNK = 50;         // пачка в MusicBrainz: ссылки + поиск = 2 запроса
 
 export function makeApp({ fetchPlaylist, playlistId, status, genresFor = null, now = Date.now,
-                          allowOrigin = '*' }) {
+                          allowOrigin = '*', genreWaitMs = GENRE_WAIT_MS }) {
   const cache = new Map();     // id → { at, promise }
   const genreCache = new Map();  // id артиста Spotify → { at, g } или { at, promise }
 
@@ -144,28 +150,34 @@ export function makeApp({ fetchPlaylist, playlistId, status, genresFor = null, n
                     { 'retry-after': String(RATE_MS / 1000) });
       }
       if (missing.length) {
-        // одна пачка на всех недостающих; кто придёт за ними же, пока она
-        // в пути, дождётся её, а не пойдёт в MusicBrainz второй раз
-        const batch = genresFor(missing);
-        for (const id of missing) {
-          const promise = batch.then(r => r[id] || []);
-          genreCache.set(id, { at: now(), promise });
-          promise.then(g => genreCache.set(id, { at: now(), g }), () => genreCache.delete(id));
+        // Пачками, и каждая запоминается, как только пришла: при перегрузке
+        // MusicBrainz лучше отдать половину, чем ничего. Кто придёт за теми
+        // же артистами, пока пачка в пути, дождётся её, а не пойдёт в
+        // MusicBrainz второй раз.
+        for (let i = 0; i < missing.length; i += GENRE_CHUNK) {
+          const part = missing.slice(i, i + GENRE_CHUNK);
+          const batch = genresFor(part);
+          batch.catch(e => console.error('/genres:', e.message));   // причину — в лог
+          for (const id of part) {
+            const promise = batch.then(r => r[id] || []);
+            genreCache.set(id, { at: now(), promise });
+            // сбой не запоминаем: в следующий раз спросим снова
+            promise.then(g => genreCache.set(id, { at: now(), g }), () => genreCache.delete(id));
+          }
         }
       }
-      try {
-        const out = {};
-        for (const id of ids) {
-          const c = genreCache.get(id);
-          out[id] = c.promise ? await c.promise : c.g;
-        }
-        return send(req, res, 200, { genres: out });
-      } catch (e) {
-        // причину — в лог: снаружи видно только «не ответил», а чинить
-        // по этому нечего (первый запуск на Railway так и разбирали)
-        console.error('/genres:', e.message);
-        return send(req, res, 502, { error: 'MusicBrainz не ответил. Жанры подтянутся в следующий раз.' });
+      const waiting = ids.map(id => genreCache.get(id)?.promise).filter(Boolean);
+      await Promise.race([
+        Promise.allSettled(waiting),
+        new Promise(r => setTimeout(r, genreWaitMs))
+      ]);
+      const out = {}, pending = [];
+      for (const id of ids) {
+        const c = genreCache.get(id);
+        if (c && !c.promise) out[id] = c.g;
+        else pending.push(id);   // ещё ищется или сорвалось — спросить позже
       }
+      return send(req, res, 200, { genres: out, pending });
     }
 
     return send(req, res, 404, { error: 'Нет такого адреса. Есть /playlist?url=…, /genres?ids=…, /health, /status' });

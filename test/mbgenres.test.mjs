@@ -2,7 +2,7 @@
    Формы ответов сняты с настоящего MusicBrainz 16.10.2026. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { genresForSpotify, genresForMbids, topGenres, _setGenreList } from '../lib/mbgenres.mjs';
+import { genresForSpotify, genresForMbids, topGenres, _setGenreList, _setBackoff, mbFetch } from '../lib/mbgenres.mjs';
 
 const GENRE_LIST = ['j-pop', 'pop', 'alternative rock', 'indie rock', 'pop rock', 'new wave', 'rock'];
 // свой список вместо data/mb-genre-list.json: проверка не должна зависеть
@@ -88,4 +88,15 @@ test('topGenres: первые три по списку', () => {
 test('посторонний из выдачи поиска не попадает в файл жанров архива', async () => {
   const mb = fakeMb({ artists: { a: [{ name: 'pop', count: 1 }] } });
   assert.deepEqual(await genresForMbids(['a', 'missing'], mb.fetchImpl), { a: [['pop', 1]], missing: [] });
+});
+
+test('перегрузка MusicBrainz: 503 пережидаем, а не сдаёмся с третьей попытки', async () => {
+  _setBackoff(10);
+  let n = 0;
+  const fetchImpl = async () => (++n <= 4)
+    ? new Response('', { status: 503, headers: { 'retry-after': '0' } })
+    : new Response(JSON.stringify({ ok: 1 }), { status: 200 });
+  assert.deepEqual(await mbFetch('/x', fetchImpl), { ok: 1 });
+  assert.equal(n, 5);
+  _setBackoff(1000);
 });

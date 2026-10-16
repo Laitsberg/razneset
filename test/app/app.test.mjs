@@ -266,12 +266,36 @@ test('жанры запоминаются: второй вход MusicBrainz н�
   await context.close();
 });
 
+test('MusicBrainz тянет: сначала часть, недоисканное переспрашиваем', async () => {
+  let n = 0;
+  const { page, context, genreCalls } = await open({
+    reply: plWith(GT),
+    genres: () => (++n === 1)
+      ? { status: 200, body: { genres: { [JAZZ_ID]: ['jazz'] }, pending: [PUNK_ID, NONE_ID] } }
+      : { status: 200, body: { genres: { [PUNK_ID]: ['punk'], [NONE_ID]: [] }, pending: [] } }
+  });
+  // не ждать 25 секунд в проверке
+  await page.clock.install();
+  await submit(page, LINK);
+  await page.waitForFunction(() => /ещё 2 ищутся/.test(document.getElementById('genreNote').textContent));
+  assert.equal(await page.locator('#list .rate', { hasText: 'по жанру' }).count(), 1);
+  await page.clock.runFor(26_000);
+  await page.waitForFunction(() => /нашёлся у 2 из 3/.test(document.getElementById('genreNote').textContent));
+  assert.deepEqual(new URL(genreCalls[1]).searchParams.get('ids').split(',').sort(), [NONE_ID, PUNK_ID].sort());
+  assert.equal(await page.locator('#list .rate', { hasText: 'по жанру' }).count(), 2);
+  await context.close();
+});
+
 test('MusicBrainz не ответил — список на месте, прогноз без жанра, честная пометка', async () => {
-  const { page, context } = await open({
+  const { page, context, genreCalls } = await open({
     reply: plWith(GT), genres: () => ({ status: 502, body: { error: 'MusicBrainz не ответил.' } })
   });
+  await page.clock.install();
   await submit(page, LINK);
-  await page.waitForFunction(() => /не ответил/.test(document.getElementById('genreNote').textContent));
+  await page.waitForSelector('#result:not([hidden])');
+  for (let i = 0; i < 4; i++) await page.clock.runFor(26_000);
+  await page.waitForFunction(() => /при следующем открытии/.test(document.getElementById('genreNote').textContent));
+  assert.equal(genreCalls.length, 4, 'переспросили, но не бесконечно');
   assert.equal(await page.locator('#list li').count(), 3);
   assert.equal(await page.locator('#list .rate', { hasText: 'по жанру' }).count(), 0);
   await context.close();
