@@ -147,3 +147,10 @@ test('у знакомого артиста жанр почти не влияет
   assert.equal(p.basis[0].name, 'Reol');
   assert.match(p.why, /Reol: 3 разноса/);
 });
+
+test('несколько жанров в пояснении — каждый в своих кавычках', () => {
+  const rowsMb = [row('J1', 'a', 9, 1), row('P1', 'c', 4, 1)];
+  const m = buildModel({ rows: rowsMb, display: k => k, scale: SCALE, mbOf: k => k === 'j1' ? ['jazz', 'vocal jazz'] : ['punk'] });
+  const p = predictTrack(indexModel(m), { ...tr(['Новенький'], 'X'), mbGenres: ['jazz', 'vocal jazz'] });
+  assert.match(p.why, /в жанрах «jazz», «vocal jazz»/);
+});
