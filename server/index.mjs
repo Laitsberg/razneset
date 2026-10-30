@@ -5,10 +5,13 @@ import http from 'node:http';
 import { makeApp } from './app.mjs';
 import { genresForSpotify } from '../lib/mbgenres.mjs';
 import { fetchPlaylist, playlistId, anonToken, queryHashes, hashSource } from '../lib/spotify.mjs';
+import { fetchYoutubePlaylist, youtubePlaylistId } from '../lib/youtube.mjs';
 
 const app = makeApp({
   fetchPlaylist,
   playlistId,
+  fetchYoutube: id => fetchYoutubePlaylist(id),
+  youtubeId: youtubePlaylistId,
   genresFor: ids => genresForSpotify(ids),
   allowOrigin: process.env.ALLOW_ORIGIN || '*',
   status: async () => {

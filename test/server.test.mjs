@@ -206,3 +206,38 @@ test('/genres: через две недели спрашиваем заново'
   await s.get(`/genres?ids=${A1}`);
   assert.equal(g.calls.length, 2);
 });
+
+test('плейлист YouTube: ролики с каналом, свой кеш, закрытые объяснены', async t => {
+  const yt = [];
+  const s = await start({ app: {
+    youtubeId: id => (id.match(/list=([\w-]{10,})/) || [])[1] || '',
+    fetchYoutube: async id => {
+      yt.push(id);
+      if (id === 'PLclosed00000') throw new Error('Плейлист не найден или закрыт. Сделай его открытым или доступным по ссылке.');
+      return { name: 'Рок', total: 1, tracks: [{ id: 'aaaaaaaaaaa', title: 'Queen - Somebody To Love', channel: 'Queen Official', ms: 310_000, лишнее: 1 }] };
+    }
+  } });
+  t.after(s.close);
+  const r = await s.get('/youtube?url=' + encodeURIComponent('https://www.youtube.com/playlist?list=PLrock0000001'));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.name, 'Рок');
+  assert.deepEqual(r.body.tracks, [{ id: 'aaaaaaaaaaa', title: 'Queen - Somebody To Love', channel: 'Queen Official', ms: 310_000 }]);
+  // второй раз — из кеша, YouTube не трогаем; Spotify не трогали вовсе
+  const r2 = await s.get('/youtube?url=' + encodeURIComponent('https://www.youtube.com/playlist?list=PLrock0000001'));
+  assert.equal(r2.headers['x-cache'], 'hit');
+  assert.deepEqual(yt, ['PLrock0000001']);
+  assert.deepEqual(s.calls, []);
+
+  const wl = await s.get('/youtube?url=' + encodeURIComponent('https://www.youtube.com/playlist?list=WL'));
+  assert.equal(wl.status, 400);
+  assert.match(wl.body.error, /всегда закрыты/);
+  const closed = await s.get('/youtube?url=' + encodeURIComponent('https://www.youtube.com/playlist?list=PLclosed00000'));
+  assert.equal(closed.status, 404);
+  assert.match(closed.body.error, /не найден или закрыт/);
+});
+
+test('без YouTube в настройках сервера /youtube — просто 404', async t => {
+  const s = await start(); t.after(s.close);
+  const r = await s.get('/youtube?url=x');
+  assert.equal(r.status, 404);
+});

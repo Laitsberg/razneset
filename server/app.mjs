@@ -9,6 +9,8 @@
    со Spotify — здесь, а прогноз считает телефон по модели с GitHub Pages.
 
    GET /playlist?url=<ссылка или ID>  → { id, name, total, tracks: [...] }
+   GET /youtube?url=<ссылка или ID>   → то же для плейлиста YouTube: tracks —
+                                        ролики { id, title, channel, ms }
    GET /health                        → жив ли (Spotify не трогает)
    GET /status                        → ходит ли в Spotify: токен и отпечатки
 
@@ -44,6 +46,7 @@ const GENRE_WAIT_MS = 20_000;
 const GENRE_CHUNK = 50;         // пачка в MusicBrainz: ссылки + поиск = 2 запроса
 
 export function makeApp({ fetchPlaylist, playlistId, status, genresFor = null, now = Date.now,
+                          fetchYoutube = null, youtubeId = null,
                           allowOrigin = '*', genreWaitMs = GENRE_WAIT_MS }) {
   const cache = new Map();     // id → { at, promise }
   const genreCache = new Map();  // id артиста Spotify → { at, g } или { at, promise }
@@ -64,17 +67,23 @@ export function makeApp({ fetchPlaylist, playlistId, status, genresFor = null, n
   const clientIp = req => String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
     .split(',')[0].trim();
 
-  function load(id) {
-    const c = cache.get(id);
+  // Ключ кеша у YouTube с приставкой: id плейлистов двух площадок не пересекаются,
+  // но так это видно и без знания форматов.
+  function load(id, youtube = false) {
+    const key = (youtube ? 'yt:' : '') + id;
+    const c = cache.get(key);
     if (c && now() - c.at < CACHE_MS) return { promise: c.promise, cached: true };
-    const promise = fetchPlaylist(id).then(pl => ({
+    const promise = youtube
+      ? fetchYoutube(id).then(pl => ({ id, name: pl.name, total: pl.total,
+          tracks: pl.tracks.map(t => ({ id: t.id, title: t.title, channel: t.channel, ms: t.ms })) }))
+      : fetchPlaylist(id).then(pl => ({
       id, name: pl.name, total: pl.total,
       // альбом в прогнозе не нужен, а на 10 000 треках это лишние сотни КБ
       tracks: pl.tracks.map(t => ({ id: t.id, title: t.title, artists: t.artists, ms: t.ms }))
     }));
     // ошибку не кешируем: закрытый плейлист могут открыть через минуту
-    promise.catch(() => cache.delete(id));
-    cache.set(id, { at: now(), promise });
+    promise.catch(() => cache.delete(key));
+    cache.set(key, { at: now(), promise });
     while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
     return { promise, cached: false };
   }
@@ -113,26 +122,31 @@ export function makeApp({ fetchPlaylist, playlistId, status, genresFor = null, n
       catch (e) { return send(req, res, 502, { ok: false, error: e.message }); }
     }
 
-    if (u.pathname === '/playlist') {
-      const id = playlistId(u.searchParams.get('url') || u.searchParams.get('id') || '');
-      if (!id) return send(req, res, 400, { error: 'Это не похоже на ссылку на плейлист Spotify.' });
+    const youtube = u.pathname === '/youtube' && fetchYoutube;
+    if (u.pathname === '/playlist' || youtube) {
+      const raw = u.searchParams.get('url') || u.searchParams.get('id') || '';
+      const id = youtube ? youtubeId(raw) : playlistId(raw);
+      if (!id) return send(req, res, 400, { error: youtube
+        ? (/[?&]list=(WL|LL)\b/.test(raw) ? '«Смотреть позже» и «Понравившиеся» YouTube всегда закрыты — собери треки в обычный плейлист.'
+                                         : 'Это не похоже на ссылку на плейлист YouTube.')
+        : 'Это не похоже на ссылку на плейлист Spotify.' });
 
       // Railway стоит за прокси: настоящий адрес — первый в x-forwarded-for
       const ip = clientIp(req);
-      const c = cache.get(id);
+      const c = cache.get((youtube ? 'yt:' : '') + id);
       const fresh = c && now() - c.at < CACHE_MS;
       if (!fresh && overLimit(ip)) {
         return send(req, res, 429, { error: 'Слишком много плейлистов подряд. Попробуй минут через десять.' },
                     { 'retry-after': String(RATE_MS / 1000) });
       }
       try {
-        const { promise, cached } = load(id);
+        const { promise, cached } = load(id, !!youtube);
         const body = await promise;
         return send(req, res, 200, body, { 'x-cache': cached ? 'hit' : 'miss' });
       } catch (e) {
         const closed = /не найден|закрыт/i.test(e.message);
         return send(req, res, closed ? 404 : 502, {
-          error: closed ? e.message : 'Spotify не ответил. Попробуй ещё раз чуть позже.'
+          error: closed ? e.message : (youtube ? 'YouTube' : 'Spotify') + ' не ответил. Попробуй ещё раз чуть позже.'
         });
       }
     }
@@ -180,6 +194,6 @@ export function makeApp({ fetchPlaylist, playlistId, status, genresFor = null, n
       return send(req, res, 200, { genres: out, pending });
     }
 
-    return send(req, res, 404, { error: 'Нет такого адреса. Есть /playlist?url=…, /genres?ids=…, /health, /status' });
+    return send(req, res, 404, { error: 'Нет такого адреса. Есть /playlist?url=…, /youtube?url=…, /genres?ids=…, /health, /status' });
   };
 }
