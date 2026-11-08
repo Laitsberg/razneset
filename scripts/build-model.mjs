@@ -6,7 +6,12 @@
    копии, если задан FARYMA_STATS_DIR). Для треков архива со ссылкой на
    Spotify спрашиваем у Spotify их артистов — так узнаём, какой ID
    артиста Spotify стоит за именем в таблице. Ответы копятся в
-   data/spotify-tracks.json, и назавтра спрашиваем только новые. */
+   data/spotify-tracks.json, и назавтра спрашиваем только новые.
+
+   SPOTIFY=off — не спрашивать Spotify вовсе, собрать модель по кэшу.
+   Так идёт прогон по расписанию: автоматически ходить в Spotify
+   владелец попросил перестать, а связка по ID лишь уточняет
+   сопоставление имён — прогноз считается и без новых ответов. */
 import fs from 'node:fs';
 import { loadShared, loadArchiveCsv } from '../lib/shared.mjs';
 import { archiveRows } from '../lib/archive.mjs';
@@ -39,7 +44,11 @@ const scale = sh.SCALE_ORDER.map(label => {
 fs.mkdirSync('data', { recursive: true });
 const cache = fs.existsSync(CACHE) ? JSON.parse(fs.readFileSync(CACHE, 'utf8')) : {};
 const want = [...new Set(rows.map(r => r.spId).filter(Boolean))].filter(id => !(id in cache));
-if (want.length) {
+const askSpotify = process.env.SPOTIFY !== 'off';
+if (want.length && !askSpotify) {
+  console.log(`Spotify выключен (SPOTIFY=off): ${want.length} новых треков архива подождут ручного запуска`);
+}
+if (want.length && askSpotify) {
   console.log(`Spotify: спрашиваю ${want.length} новых треков архива…`);
   let done = 0, failed = 0;
   const PAR = 6;

@@ -9,10 +9,21 @@ name: Пересобрать модель прогноза
 # полминуты.
 #
 # Запустить руками: вкладка Actions → «Run workflow».
+#
+# Spotify по расписанию не спрашиваем: автоматический режим для него
+# владелец попросил убрать. Плановый прогон собирает модель по уже
+# накопленному data/spotify-tracks.json, а новых треков у Spotify
+# спрашивает только ручной запуск с галочкой «Спросить Spotify».
 on:
   schedule:
     - cron: '41 */3 * * *'
   workflow_dispatch:
+    inputs:
+      spotify:
+        description: 'Спросить Spotify про новые треки архива'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -41,7 +52,11 @@ jobs:
       - name: Жанры MusicBrainz
         run: node scripts/mb-genres.mjs
 
+      # Галочка есть только у ручного запуска; у планового inputs пуст,
+      # и выражение даёт off — Spotify не трогаем.
       - name: Собрать модель
+        env:
+          SPOTIFY: ${{ github.event_name == 'workflow_dispatch' && inputs.spotify && 'on' || 'off' }}
         run: node scripts/build-model.mjs
 
       - name: Закоммитить, если что-то изменилось
